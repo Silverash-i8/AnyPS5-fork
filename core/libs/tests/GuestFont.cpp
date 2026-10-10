@@ -30,6 +30,18 @@ int APS5_VABI sceFontSetScriptLanguage(FontHandle, int, int);
 int APS5_VABI sceFontGetScriptLanguage(FontHandle, int, int*);
 int APS5_VABI sceFontSetTypographicDesign(FontHandle, int, int);
 int APS5_VABI sceFontGetTypographicDesign(FontHandle, int, int*);
+int APS5_VABI sceFontTextSourceInit(FontTextSource*, const void*, std::uint32_t, FontTextParseFunction, void*);
+int APS5_VABI sceFontTextSourceSetDefaultFont(FontTextSource*, FontHandle);
+int APS5_VABI sceFontCreateString(const FontMemory*, FontTextSource*, const void*, FontString*);
+int APS5_VABI sceFontDestroyString(FontString*);
+FontTextCharacter* APS5_VABI sceFontStringRefersTextCharacters(FontString, std::uint32_t*);
+int APS5_VABI sceFontCharacterGetSyllableStringState(const FontTextCharacter*, int*);
+int APS5_VABI sceFontCreateWords(const FontMemory*, FontTextSource*, const void*, void**);
+int APS5_VABI sceFontWordsFindWordCharacters(void*, FontTextCharacter*, FontTextCharacter*, FontTextCharacter**, FontTextCharacter**);
+int APS5_VABI sceFontDestroyWords(void**);
+int APS5_VABI sceFontFtSupportTrueType();
+int APS5_VABI sceFontFtSupportOpenTypeOtf();
+int APS5_VABI sceFontFtSupportBdf();
 int APS5_VABI sceFontSetResolutionDpi(FontHandle, std::uint32_t, std::uint32_t);
 int APS5_VABI sceFontGetResolutionDpi(FontHandle, std::uint32_t*, std::uint32_t*);
 int APS5_VABI sceFontSetScalePixel(FontHandle, float, float);
@@ -126,6 +138,19 @@ static std::vector<unsigned char> KerningFont() {
     });
 }
 
+static std::int32_t APS5_VABI ParseUtf32(FontTextSource* source, void** order, FontTextParseResult* result) {
+    const auto* current = static_cast<const std::uint32_t*>(source->current);
+    *order = const_cast<std::uint32_t*>(current);
+    if (current >= static_cast<const std::uint32_t*>(source->end)) {
+        result->Terminate.terminateCode = 0;
+        return 0;
+    }
+    result->FontCode.font = nullptr;
+    result->FontCode.code = *current;
+    source->current = current + 1;
+    return 1;
+}
+
 static bool KerningIs(const FontKerning& kerning, float offsetX) {
     return kerning.offsetX == offsetX && kerning.offsetY == 0.0f && kerning.positionX == 0.0f && kerning.positionY == 0.0f;
 }
@@ -141,6 +166,7 @@ int main() {
     Require(sceFontMemoryInit(&memory, nullptr, 0, &iface, nullptr, nullptr, nullptr) == SCE_FONT_OK);
     Require(sceFontSelectLibraryFt(0) != nullptr && sceFontSelectLibraryFt(1) == nullptr);
     Require(sceFontSelectRendererFt(0) != nullptr && sceFontSelectRendererFt(1) == nullptr);
+    Require(sceFontFtSupportTrueType() == 0 && sceFontFtSupportOpenTypeOtf() == 0 && sceFontFtSupportBdf() == 0);
 
     FontLibrary library = nullptr;
     Require(sceFontCreateLibrary(&memory, nullptr, &library) == SCE_FONT_ERROR_INVALID_PARAMETER && library == nullptr);
@@ -218,6 +244,32 @@ int main() {
     Require(sceFontGetTypographicDesign(font, 1, &setting) == SCE_FONT_OK && setting == 2);
     Require(sceFontGetTypographicDesign(font, 5, &setting) == SCE_FONT_OK && setting == 0);
     Require(sceFontGetTypographicDesign(nullptr, 1, &setting) == SCE_FONT_ERROR_INVALID_FONT_HANDLE);
+
+    const std::uint32_t text[] = {'a', 'b', ' ', ' ', 'c', 'd', ' ', 'e'};
+    FontTextSource source{};
+    Require(sceFontTextSourceInit(&source, text, sizeof(text), ParseUtf32, nullptr) == SCE_FONT_OK);
+    Require(sceFontTextSourceSetDefaultFont(&source, font) == SCE_FONT_OK);
+    FontString string = nullptr;
+    Require(sceFontCreateString(&memory, &source, nullptr, &string) == SCE_FONT_OK);
+    std::uint32_t characterCount = 0;
+    FontTextCharacter* characters = sceFontStringRefersTextCharacters(string, &characterCount);
+    Require(characters != nullptr && characterCount == 8);
+    Require(sceFontCharacterGetSyllableStringState(&characters[0], &setting) == SCE_FONT_OK && setting == 0);
+    Require(sceFontCharacterGetSyllableStringState(nullptr, &setting) == SCE_FONT_ERROR_INVALID_PARAMETER);
+    void* words = nullptr;
+    Require(sceFontCreateWords(&memory, nullptr, nullptr, &words) == SCE_FONT_ERROR_INVALID_PARAMETER && words == nullptr);
+    Require(sceFontCreateWords(&memory, &source, nullptr, &words) == SCE_FONT_OK && words != nullptr);
+    FontTextCharacter* last = nullptr;
+    FontTextCharacter* next = nullptr;
+    Require(sceFontWordsFindWordCharacters(words, &characters[0], nullptr, &last, &next) == SCE_FONT_OK && last == &characters[3] && next == &characters[4]);
+    Require(sceFontWordsFindWordCharacters(words, &characters[4], nullptr, &last, &next) == SCE_FONT_OK && last == &characters[6] && next == &characters[7]);
+    Require(sceFontWordsFindWordCharacters(words, &characters[7], nullptr, &last, &next) == SCE_FONT_OK && last == &characters[7] && next == nullptr);
+    Require(sceFontWordsFindWordCharacters(words, &characters[0], &characters[2], &last, &next) == SCE_FONT_OK && last == &characters[1] && next == nullptr);
+    Require(sceFontWordsFindWordCharacters(words, &characters[2], nullptr, &last, &next) == SCE_FONT_OK && last == &characters[3] && next == &characters[4]);
+    Require(sceFontWordsFindWordCharacters(nullptr, &characters[0], nullptr, &last, &next) == SCE_FONT_ERROR_INVALID_WORDS && last == nullptr && next == nullptr);
+    Require(sceFontDestroyWords(&words) == SCE_FONT_OK && words == nullptr);
+    Require(sceFontDestroyWords(&words) == SCE_FONT_ERROR_INVALID_WORDS);
+    Require(sceFontDestroyString(&string) == SCE_FONT_OK);
     std::uint32_t hDpi = 1;
     std::uint32_t vDpi = 1;
     Require(sceFontGetResolutionDpi(font, &hDpi, &vDpi) == SCE_FONT_OK && hDpi == 72 && vDpi == 72);
