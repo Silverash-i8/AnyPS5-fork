@@ -60,7 +60,46 @@ bool inEnclosingContinueConstruct(const ControlFlowGraph& graph, std::uint32_t h
     });
 }
 
-void verifyStructured(const std::string& prefix, const ControlFlowGraph& graph) {
+ControlFlowGraph withStructuralDominators(ControlFlowGraph graph) {
+    for (const auto& block : graph.blocks) {
+        const auto& terminator = block.terminator;
+        for (const auto declared : {terminator.mergeBlock, terminator.loopHeader ? terminator.continueBlock : InvalidControlFlowId}) {
+            if (declared == InvalidControlFlowId) continue;
+            auto& predecessors = graph.FindBlock(declared).predecessors;
+            if (std::find(predecessors.begin(), predecessors.end(), block.id) == predecessors.end()) predecessors.push_back(block.id);
+        }
+    }
+    std::vector<std::uint32_t> all;
+    for (const auto& block : graph.blocks) all.push_back(block.id);
+    std::sort(all.begin(), all.end());
+    for (auto& block : graph.blocks) block.dominators = block.id == graph.entryBlock ? std::vector<std::uint32_t>{block.id} : all;
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto& block : graph.blocks) {
+            if (block.id == graph.entryBlock) continue;
+            std::vector<std::uint32_t> next;
+            for (std::size_t i = 0; i < block.predecessors.size(); ++i) {
+                const auto& dominators = graph.FindBlock(block.predecessors[i]).dominators;
+                if (i == 0) {
+                    next = dominators;
+                    continue;
+                }
+                std::vector<std::uint32_t> common;
+                std::set_intersection(next.begin(), next.end(), dominators.begin(), dominators.end(), std::back_inserter(common));
+                next = std::move(common);
+            }
+            if (!std::binary_search(next.begin(), next.end(), block.id)) next.insert(std::upper_bound(next.begin(), next.end(), block.id), block.id);
+            if (next != block.dominators) {
+                block.dominators = std::move(next);
+                changed = true;
+            }
+        }
+    }
+    return graph;
+}
+
+void verifyStructured(const std::string& prefix, const ControlFlowGraph& structured) {
+    const auto graph = withStructuralDominators(structured);
     std::map<std::uint32_t, std::uint32_t> mergeOwners;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> loopExits;
     for (const auto& block : graph.blocks) {
@@ -298,6 +337,32 @@ void verifyNullSwappc() {
         const auto error = refusal(code);
         require(error.find(message) != std::string::npos, std::string(name) + ": expected a refusal with '" + std::string(message) + "', got '" + error + "'");
     }
+}
+
+void verifyMergeDeclarationDominance() {
+    const std::vector<std::vector<std::uint32_t>> successors{{1, 5}, {2, 3}, {5}, {5, 4}, {1}, {}};
+    ControlFlowGraph graph;
+    graph.entryBlock = 0;
+    for (std::uint32_t id = 0; id < successors.size(); ++id) {
+        BasicBlock block;
+        block.id = id;
+        block.instructionBegin = id * 2;
+        block.instructionEnd = id * 2 + 2;
+        block.successors = successors[id];
+        auto& terminator = block.terminator;
+        terminator.kind = successors[id].empty() ? TerminatorKind::Return : successors[id].size() == 1 ? TerminatorKind::Branch : TerminatorKind::ConditionalBranch;
+        if (!successors[id].empty()) terminator.trueBlock = successors[id][0];
+        if (successors[id].size() == 2) {
+            terminator.condition = BranchCondition::SccNonZero;
+            terminator.falseBlock = successors[id][1];
+        }
+        graph.blocks.push_back(std::move(block));
+    }
+    for (const auto& block : graph.blocks) {
+        for (const auto successor : block.successors) graph.blocks[successor].predecessors.push_back(block.id);
+    }
+    Structurizer{}.Structurize(graph);
+    verifyStructured("a loop merge reached only through an inner selection: ", graph);
 }
 
 }
@@ -931,6 +996,12 @@ done:
             std::fprintf(stderr, "%s\n%.*s\n", error.what(), static_cast<int>(program.source.size()), program.source.data());
             ++failures;
         }
+    }
+    try {
+        verifyMergeDeclarationDominance();
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "%s\n", error.what());
+        ++failures;
     }
     try {
         verifyNullSwappc();
