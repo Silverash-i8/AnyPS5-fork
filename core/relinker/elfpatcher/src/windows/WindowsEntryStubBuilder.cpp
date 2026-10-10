@@ -122,7 +122,7 @@ WindowsEntryStub WindowsEntryStubBuilder::Build(const std::uint32_t dataRva, con
         searchCounts.push_back(CheckedRva(order.size()));
         for (const auto index : order) {
             Io::AppendU32(data, index);
-            if (!import.Library.empty()) imported[index] = true;
+            imported[index] = true;
         }
     }
 
