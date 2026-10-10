@@ -144,6 +144,10 @@ int main() {
     try {
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
+        if (!TargetHasCapability(device->Target(), spv::CapabilityFloat64)) {
+            std::puts("skipped, the device has no shaderFloat64");
+            return VulkanTestSkipped;
+        }
         Run(*device, Code, Rows);
         Check("v_fma_f64", Rows);
         Run(*device, FmasCode, FmasRows);
