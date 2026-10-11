@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 
@@ -8,6 +9,17 @@ static constexpr int32_t GESTURE_HANDLE = 1;
 static constexpr int SCE_SYSTEM_GESTURE_ERROR_INVALID_ARGUMENT = static_cast<int>(0x80D10002);
 static constexpr int SCE_SYSTEM_GESTURE_ERROR_INVALID_HANDLE = static_cast<int>(0x80D10003);
 static constexpr int SCE_SYSTEM_GESTURE_ERROR_INDEX_OUT_OF_ARRAY = static_cast<int>(0x80D10005);
+
+namespace {
+
+struct RecognizerState {
+    std::int32_t type;
+    SystemGestureRectangle rectangle;
+};
+
+static_assert(sizeof(RecognizerState) <= sizeof(SystemGestureTouchRecognizer));
+
+}
 
 extern "C" {
 
@@ -22,11 +34,13 @@ int APS5_VABI sceSystemGestureClose(int32_t gesture_handle) {
 }
 
 int APS5_VABI sceSystemGestureCreateTouchRecognizer(int32_t gesture_handle, SystemGestureTouchRecognizer* recognizer, int32_t type, const SystemGestureRectangle* rectangle, const void* param) {
-    (void)type;
-    (void)rectangle;
     (void)param;
     if (gesture_handle != GESTURE_HANDLE) return SCE_SYSTEM_GESTURE_ERROR_INVALID_HANDLE;
     if (!recognizer) return SCE_SYSTEM_GESTURE_ERROR_INVALID_ARGUMENT;
+    RecognizerState state{type, {}};
+    if (rectangle) state.rectangle = *rectangle;
+    std::memset(recognizer, 0, sizeof(*recognizer));
+    std::memcpy(recognizer, &state, sizeof(state));
     return 0;
 }
 
@@ -95,11 +109,14 @@ int APS5_VABI sceSystemGestureGetTouchEventsCount(int32_t gesture_handle, const 
 }
 
 int APS5_VABI sceSystemGestureGetTouchRecognizerInformation(int32_t gesture_handle, const SystemGestureTouchRecognizer* recognizer, SystemGestureTouchRecognizerInformation* information) {
- (void)gesture_handle;
- (void)recognizer;
- (void)information;
- NotImplemented_nid_no_patch(__func__);
- return 0;
+    if (gesture_handle != GESTURE_HANDLE) return SCE_SYSTEM_GESTURE_ERROR_INVALID_HANDLE;
+    if (!recognizer || !information) return SCE_SYSTEM_GESTURE_ERROR_INVALID_ARGUMENT;
+    RecognizerState state;
+    std::memcpy(&state, recognizer, sizeof(state));
+    *information = {};
+    information->gesture_type = state.type;
+    information->rectangle = state.rectangle;
+    return 0;
 }
 
 int APS5_VABI sceSystemGestureInitializePrimitiveTouchRecognizer(const void* param) {
@@ -151,6 +168,10 @@ int APS5_VABI sceSystemGestureUpdateTouchRecognizerRectangle(int32_t gesture_han
     if (gesture_handle != GESTURE_HANDLE) return SCE_SYSTEM_GESTURE_ERROR_INVALID_HANDLE;
     if (!recognizer) return SCE_SYSTEM_GESTURE_ERROR_INVALID_ARGUMENT;
     if (!rectangle) return SCE_SYSTEM_GESTURE_ERROR_INVALID_ARGUMENT;
+    RecognizerState state;
+    std::memcpy(&state, recognizer, sizeof(state));
+    state.rectangle = *rectangle;
+    std::memcpy(recognizer, &state, sizeof(state));
     return 0;
 }
 
